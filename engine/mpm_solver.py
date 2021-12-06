@@ -281,6 +281,66 @@ class MPMSolver:
             self.grid_v = self.grid_v[0]
             self.grid_m = self.grid_m[0]
             self.pid = self.pid[0]
+        
+        self.ggui_initialized = False
+        self.init_ggui()
+
+    @ti.kernel
+    def copy_particles_pos_for_ggui(self):
+        for i in range(self.n_ggui_particles):
+            self.x_for_ggui[i] = ti.cast(self.x[10 * i], ti.f32)
+
+    def init_ggui(self):
+        self.ground = ti.Vector.field(3, dtype=ti.f32, shape=(4))
+        self.ground_indices = ti.field(dtype=int, shape=(6))
+        self.n_ggui_particles = self.max_num_particles // 10
+        self.x_for_ggui = ti.Vector.field(3, dtype=ti.f32, shape=self.n_ggui_particles)
+        self.init_ground_mesh()
+    
+    @ti.kernel
+    def init_ground_mesh(self):
+        scale = 10.0
+        self.ground[0] = ti.Vector([-1.0, -0.0, -1.0]) * scale
+        self.ground[1] = ti.Vector([1.0, -0.0, -1.0]) * scale
+        self.ground[2] = ti.Vector([1.0, -0.0, 1.0]) * scale
+        self.ground[3] = ti.Vector([-1.0, -0.0, 1.0]) * scale
+
+        self.ground_indices[0] = 0
+        self.ground_indices[1] = 1
+        self.ground_indices[2] = 2
+        self.ground_indices[3] = 0
+        self.ground_indices[4] = 2
+        self.ground_indices[5] = 3
+
+    def init_ggui_window(self):
+        if not self.ggui_initialized:
+            camera = ti.ui.make_camera()
+            cam_pos = (1.5, 1.5, 1.5)
+            camera.position(*(cam_pos))
+            camera.lookat(0.5, 0.5, 0.5)
+            camera.up(0.0, 1.0, 0.0)
+            camera.fov(55)
+            self.window = ti.ui.Window('3D MPM Fluid Simulator', (640, 720), show_window = False)
+            self.scene = ti.ui.Scene()
+            self.canvas = self.window.get_canvas()
+            self.canvas.set_background_color((0.9, 0.9, 0.9))
+            self.scene.set_camera(camera)
+            self.scene.ambient_light((0.1, 0.1, 0.1))
+    
+    def draw_ggui(self, frame, output_path):
+        self.scene.point_light(pos=(0.5, 5.5, 0.5), color=(2, 2, 2))
+        self.scene.mesh(self.ground, 
+                    indices=self.ground_indices,
+                    color=(0.5, 0.5, 0.5),
+                    two_sided=True)
+        # self.copy_particles_pos_for_ggui()
+        # self.scene.particles(self.x_for_ggui, 0.005, color=(.5, .5, 1.0))
+        self.scene.particles(self.x, 0.005, color=(.5, .5, 1.0))
+        
+        self.canvas.scene(self.scene)
+
+        png_name = f'{output_path}/{frame:06d}.png'
+        self.window.write_image(png_name)
 
     def init_sdf_collider(self):
         indices = ti.ijk if self.dim == 3 else ti.ij
@@ -358,8 +418,8 @@ class MPMSolver:
                     theta = self.collider_theta[None]
                     vx = ti.cos(theta) * g[0] + ti.sin(theta) * g[2]
                     vz = -ti.sin(theta) * g[0] + ti.cos(theta) * g[2]
-                    # grid_v[I] = [vx, g[1], vz] 
-                    grid_v[I] = [0.0, 0.0, 0.0]
+                    grid_v[I] = [vx, g[1], vz] 
+                    # grid_v[I] = [0.0, 0.0, 0.0]
 
         self.grid_postprocess.append(collide)
 
