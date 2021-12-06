@@ -154,6 +154,7 @@ class MPMSolver:
             # TODO: use 8?
             self.leaf_block_size = 4
 
+        self.grid_block_size = grid_block_size
         self.grid = []
         self.grid_v = []
         self.grid_m = []
@@ -271,11 +272,96 @@ class MPMSolver:
 
         self.writers = []
 
+        use_sdf_collider = True
+        if use_sdf_collider:
+            self.init_sdf_collider()
+
         if not self.use_g2p2g:
             self.grid = self.grid[0]
             self.grid_v = self.grid_v[0]
             self.grid_m = self.grid_m[0]
             self.pid = self.pid[0]
+
+    def init_sdf_collider(self):
+        indices = ti.ijk if self.dim == 3 else ti.ij
+        grid = ti.root.pointer(indices, self.grid_size // self.grid_block_size)
+        block = grid.pointer(indices, self.grid_block_size // self.leaf_block_size)
+
+        self.collider_sdf = ti.field(dtype=float)
+        self.collider_sdf_normal = ti.Vector.field(self.dim, dtype=float)
+        def block_component(c):
+            block.dense(indices, self.leaf_block_size).place(c, offset=self.offset)
+        block_component(self.collider_sdf)
+        for i in range(self.dim):
+            block_component(self.collider_sdf_normal.get_scalar_field(i))
+        
+        self.collider_theta = ti.field(dtype=float, shape=())
+        self.collider_height = ti.field(dtype=float, shape=())
+
+        _sdf = np.load('inputs/propeller.npz')['sdf']
+        _sdf_normal = np.load('inputs/propeller_normal.npz')['sdf']
+        _sdf_max = _sdf.max() 
+
+        N = self.res[0]
+        # print(f'self.offset: {self.offset}')
+        _offset = (N//2, N//2, N//2)
+        @ti.kernel
+        def _init_sdf_value(data: ti.ext_arr(), normal: ti.ext_arr()):
+            for i, j, k in ti.ndrange((0, N), (0, N), (0, N)):
+                if data[i, j, k] < _sdf_max:
+                    # idx = ti.Vector([i, j, k]) - _offset
+                    idx = ti.Vector([i, j, k])
+                    self.collider_sdf[idx] = data[i, j, k]
+                    for l in ti.static(range(3)):
+                        self.collider_sdf_normal[idx][l] = normal[i, j, k, l]
+
+        _init_sdf_value(_sdf, _sdf_normal)
+        del _sdf
+        del _sdf_normal
+
+        @ti.func
+        def transform_scene(self, I):
+            C = ti.Vector([0, 0, 0])
+            offset = I - C
+            theta = -self.collider_theta[None]
+            x = ti.cos(theta) * offset[0] + ti.sin(theta) * offset[2] + C[0] + 0.5
+            z = -ti.sin(theta) * offset[0] + ti.cos(theta) * offset[2] + C[2] + 0.5
+            y = I[1] - int(self.collider_height[None] / self.dx + 0.5)
+            x_int = ti.cast(x, ti.int32)
+            z_int = ti.cast(z, ti.int32)
+            y_int = ti.cast(y, ti.int32)
+            y_int = ti.max(y_int, 0)
+            return ti.Vector([x_int, y_int, z_int])
+
+        @ti.func
+        def sdf(I):
+            ret = 1.0
+            if self.collider_sdf[I] < 0.0:
+                ret = -1.0
+            # if I[0] < 100 and I[1] < 100 and I[2] < 100:
+                # return -1.0
+            return ret
+
+        @ti.func
+        def sdf_grad(I):
+            return self.collider_sdf_normal[I]
+
+        @ti.kernel
+        def collide(t: ti.f32, dt: ti.f32, grid_v: ti.template()):
+            for I in ti.grouped(grid_v):
+                # idx = self.transform_scene(I)
+                idx = I
+                # print(idx)
+                d = sdf(idx)
+                if d < 0:
+                    g = sdf_grad(idx)
+                    theta = self.collider_theta[None]
+                    vx = ti.cos(theta) * g[0] + ti.sin(theta) * g[2]
+                    vz = -ti.sin(theta) * g[0] + ti.cos(theta) * g[2]
+                    # grid_v[I] = [vx, g[1], vz] 
+                    grid_v[I] = [0.0, 0.0, 0.0]
+
+        self.grid_postprocess.append(collide)
 
     def stencil_range(self):
         return ti.ndrange(*((3,) * self.dim))
