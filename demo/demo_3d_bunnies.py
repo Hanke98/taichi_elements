@@ -36,7 +36,7 @@ write_to_disk = args.out_dir is not None
 ti.init(arch=ti.cuda,
         kernel_profiler=True,
         use_unified_memory=False,
-        device_memory_GB=3.0)
+        device_memory_GB=16.0)
 
 max_num_particles = 50000000
 stop_seeding_at = 150
@@ -164,9 +164,9 @@ for frame in range(args.frames):
     t = time.time()
     frame_split = 1
     if frame < stop_seeding_at:
-        for subframe in range(frame * frame_split, (frame + 1) * frame_split):
-            if mpm.n_particles[None] < max_num_particles:
-                seed_letters(subframe)
+        # for subframe in range(frame * frame_split, (frame + 1) * frame_split):
+        #     if mpm.n_particles[None] < max_num_particles:
+        #         seed_letters(subframe)
 
         mpm.step(frame_dt / frame_split, print_stat=True)
     else:
@@ -175,8 +175,8 @@ for frame in range(args.frames):
         particles = mpm.particle_info()
         visualize(particles, frame, output_dir)
 
-    if write_to_disk:
-        mpm.write_particles(f'{output_dir}/particles/{frame:05d}.npz')
+    # if write_to_disk:
+    #     # mpm.write_particles(f'{output_dir}/particles/{frame:05d}.npz')
     print(f'Folder name {output_dir}')
     print(f'Frame total time {time.time() - t:.3f}')
     print(f'Total running time {time.time() - start_t:.3f}')
